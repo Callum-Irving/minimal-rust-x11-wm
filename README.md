@@ -15,6 +15,10 @@ This is a project I am creating for fun. The goal is to have a functional tiling
 * In the project directory run `cargo build --release`
 * Run the executable created in `target/release`
 
+## License
+
+This project is licensed under the GPLv2 license. See [LICENSE](LICENSE).
+
 ## Acknowledgements
 
 Here are a few sources I used to learn how to make this:
