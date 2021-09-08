@@ -1,5 +1,6 @@
 mod config;
 
+use std::collections::VecDeque;
 use std::process::exit;
 use x11rb::connection::Connection;
 use x11rb::errors::{ConnectionError, ReplyError, ReplyOrIdError};
@@ -15,9 +16,8 @@ pub struct Keybind<'a>(Keycode, ModMask, fn(&mut WindowManager<'a>));
 pub struct WindowManager<'a> {
     conn: &'a RustConnection,
     screen: &'a Screen,
-    windows: Vec<Window>,
-    focused: Option<usize>, // Keeps track of the "master" window
     running: bool,
+    windows: VecDeque<Window>,
     keybinds: Vec<Keybind<'a>>,
 }
 
@@ -32,9 +32,8 @@ impl<'a> WindowManager<'a> {
         let wm = WindowManager {
             conn,
             screen,
-            windows: Vec::with_capacity(5), // TODO: Pick a good number for this
-            focused: None,
             running: true,
+            windows: VecDeque::new(),
             keybinds: vec![],
         };
 
@@ -167,28 +166,13 @@ impl<'a> WindowManager<'a> {
         let mut index: Option<usize> = None;
         for (i, window) in self.windows.iter().enumerate() {
             if event.window == *window {
-                // Remove element from vector
                 index = Some(i);
                 break;
             }
         }
         if let Some(index) = index {
-            warn!("Focused: {:?}", self.focused);
             self.windows.remove(index);
-            warn!("Focused: {:?}", self.focused);
-
-            warn!("Removed window at index {}", index);
-
-            // TODO: I feel like this can be refactored
-            if index < self.focused.unwrap() {
-                self.focused = Some(self.focused.unwrap() - 1);
-            } else if self.focused.unwrap() >= self.windows.len() {
-                if self.windows.len() == 0 {
-                    self.focused = None;
-                } else {
-                    self.focused = Some(self.windows.len() - 1);
-                }
-            }
+            debug!("Removed window at index {}", index);
         } else {
             // The window wasn't in our vector to begin with
             debug!("The unmapped window wasn't managed by this wm");
@@ -212,10 +196,9 @@ impl<'a> WindowManager<'a> {
         debug!("Got map request from {}", event.window);
         // TODO: Set border using configure request
         self.conn.map_window(event.window)?;
-        self.windows.push(event.window);
-        if self.focused == None {
-            self.focused = Some(0);
-        }
+
+        self.windows.push_front(event.window);
+
         debug!("Windows: {:?}", self.windows);
         Ok(())
     }
@@ -238,6 +221,7 @@ impl<'a> WindowManager<'a> {
 
         for keybind in self.keybinds.iter() {
             // TODO: Clean up event.detail by removing mouse bits
+            // TODO: Add way to handle function arguments
             if event.detail == keybind.0 {
                 if (event.state & 0x7f) == u16::from(keybind.1) {
                     debug!("Got shortcut");
@@ -255,39 +239,20 @@ impl<'a> WindowManager<'a> {
 
     // Keybind functions
 
-    // TODO: Handle case with 0 windows
     pub fn focus_next(&mut self) {
-        if self.windows.len() == 0 {
-            self.focused = None;
+        if self.windows.len() < 2 {
             return;
         }
-        if let Some(focused) = self.focused {
-            if focused + 1 >= self.windows.len() {
-                self.focused = Some(0);
-            } else {
-                self.focused = Some(focused + 1)
-            }
-        } else {
-            self.focused = Some(0);
-        }
+        let temp = self.windows.pop_front().unwrap();
+        self.windows.push_back(temp);
     }
 
-    // TODO: Handle case with 0 windows
-    // TODO: Handle negative number case
     pub fn focus_prev(&mut self) {
-        if self.windows.len() == 0 {
-            self.focused = None;
+        if self.windows.len() < 2 {
             return;
         }
-        if let Some(focused) = self.focused {
-            if focused == 0 {
-                self.focused = Some(self.windows.len() - 1);
-            } else {
-                self.focused = Some(focused - 1);
-            }
-        } else {
-            self.focused = Some(0);
-        }
+        let temp = self.windows.pop_back().unwrap();
+        self.windows.push_front(temp);
     }
 
     pub fn quit(&mut self) {
