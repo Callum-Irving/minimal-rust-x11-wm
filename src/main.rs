@@ -11,7 +11,15 @@ use x11rb::rust_connection::RustConnection;
 
 use log::{debug, error, warn};
 
-pub struct Keybind<'a>(Keycode, ModMask, fn(&mut WindowManager<'a>));
+pub enum KeybindFunction<'a> {
+    FnVoid(fn(&WindowManager<'a>)),
+    FnVoidMut(fn(&mut WindowManager<'a>)),
+    FnResult(fn(&WindowManager<'a>) -> Result<(), ReplyOrIdError>),
+    FnResultMut(fn(&mut WindowManager<'a>) -> Result<(), ReplyOrIdError>),
+}
+
+//pub struct Keybind<'a>(Keycode, ModMask, fn(&mut WindowManager<'a>));
+pub struct Keybind<'a>(Keycode, ModMask, KeybindFunction<'a>);
 
 pub struct WindowManager<'a> {
     conn: &'a RustConnection,
@@ -69,13 +77,40 @@ impl<'a> WindowManager<'a> {
 
     /// Sets up the window manager
     pub fn setup(&mut self) -> Result<(), ReplyOrIdError> {
-        self.scan_existing();
+        self.scan_existing()?;
         self.grab_keys()?;
         Ok(())
     }
 
     /// Takes control of preexisting windows
-    fn scan_existing(&self) {}
+    fn scan_existing(&mut self) -> Result<(), ReplyOrIdError> {
+        let tree_reply = self.conn.query_tree(self.screen.root)?.reply()?;
+
+        let mut cookies = Vec::with_capacity(tree_reply.children.len());
+        for win in tree_reply.children {
+            let attr = self.conn.get_window_attributes(win)?;
+            let geom = self.conn.get_geometry(win)?;
+            cookies.push((win, attr, geom));
+        }
+        // Get the replies and manage windows
+        for (win, attr, geom) in cookies {
+            let (attr, geom) = (attr.reply(), geom.reply());
+            if attr.is_err() || geom.is_err() {
+                // Just skip this window
+                continue;
+            }
+            let (attr, geom) = (attr.unwrap(), geom.unwrap());
+            if !attr.override_redirect && attr.map_state != MapState::UNMAPPED {
+                self.manage_window(win, &geom);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn manage_window(&mut self, window: Window, geom: &GetGeometryReply) {
+        self.windows.push_front(window);
+    }
 
     /// Sets up keybinds
     fn grab_keys(&mut self) -> Result<(), ReplyOrIdError> {
@@ -110,6 +145,8 @@ impl<'a> WindowManager<'a> {
     pub fn run(&mut self) {
         while self.running {
             self.conn.flush().unwrap();
+            // TODO: handle this error instead of unwrapping
+            // the error is when the server closes
             let event = self.conn.wait_for_event().unwrap();
             let mut event_option = Some(event);
             while let Some(event) = event_option {
@@ -141,7 +178,7 @@ impl<'a> WindowManager<'a> {
             Event::ButtonPress(event) => {}
             Event::ButtonRelease(event) => {}
             Event::MotionNotify(event) => {}
-            Event::KeyPress(event) => self.handle_key_press(event),
+            Event::KeyPress(event) => self.handle_key_press(event)?,
             _ => {}
         };
 
@@ -174,7 +211,6 @@ impl<'a> WindowManager<'a> {
             self.windows.remove(index);
             debug!("Removed window at index {}", index);
         } else {
-            // The window wasn't in our vector to begin with
             debug!("The unmapped window wasn't managed by this wm");
         }
         debug!("Windows: {:?}", self.windows);
@@ -193,11 +229,18 @@ impl<'a> WindowManager<'a> {
     }
 
     fn handle_map_request(&mut self, event: MapRequestEvent) -> Result<(), ReplyOrIdError> {
+        // TODO: If it is already mapped, don't add it again
+        // This might be trash, idk
+        if self.windows.contains(&event.window) {
+            return Ok(());
+        }
+
         debug!("Got map request from {}", event.window);
         // TODO: Set border using configure request
         self.conn.map_window(event.window)?;
 
-        self.windows.push_front(event.window);
+        let geom = &self.conn.get_geometry(event.window)?.reply()?;
+        self.manage_window(event.window, geom);
 
         debug!("Windows: {:?}", self.windows);
         Ok(())
@@ -213,9 +256,8 @@ impl<'a> WindowManager<'a> {
 
     fn handle_motion_notify() {}
 
-    fn handle_key_press(&mut self, event: KeyPressEvent) {
+    fn handle_key_press(&mut self, event: KeyPressEvent) -> Result<(), ReplyOrIdError> {
         debug!("Keycode: {}. Modmask: {}", event.detail, event.state);
-        debug!("Mod4: {:?}", u16::from(ModMask::M4));
 
         let mut keybind_pressed = None;
 
@@ -224,7 +266,7 @@ impl<'a> WindowManager<'a> {
             // TODO: Add way to handle function arguments
             if event.detail == keybind.0 {
                 if (event.state & 0x7f) == u16::from(keybind.1) {
-                    debug!("Got shortcut");
+                    debug!("Got keyboard shortcut");
                     keybind_pressed = Some(keybind);
                     break;
                 }
@@ -232,9 +274,14 @@ impl<'a> WindowManager<'a> {
         }
 
         if let Some(func) = keybind_pressed {
-            debug!("Calling func");
-            func.2(self);
+            match func.2 {
+                KeybindFunction::FnVoid(func) => func(self),
+                KeybindFunction::FnVoidMut(func) => func(self),
+                KeybindFunction::FnResult(func) => func(self)?,
+                KeybindFunction::FnResultMut(func) => func(self)?,
+            };
         }
+        Ok(())
     }
 
     // Keybind functions
@@ -257,6 +304,17 @@ impl<'a> WindowManager<'a> {
 
     pub fn quit(&mut self) {
         self.running = false;
+    }
+
+    // TODO: Big error: if one window being closed causes another to be closed, we don't remove
+    // both from windows
+    // This is caused because one window asks to map twice
+    pub fn kill_focused(&mut self) -> Result<(), ReplyOrIdError> {
+        self.conn.kill_client(self.windows[0])?.check()?;
+        // TODO: Maybe we do need this
+        // I'm leaving it out because we will receive unmapnotify when we kill it
+        //self.windows.pop_front();
+        Ok(())
     }
 
     pub fn set_keybinds(&mut self, keybinds: Vec<Keybind<'a>>) {
