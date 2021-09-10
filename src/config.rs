@@ -1,7 +1,7 @@
 use crate::{Keybind, KeybindFunction, WindowManager};
 use x11rb::protocol::xproto::ModMask;
 
-pub fn bind_keys<'a>(wm: &mut WindowManager<'a>) {
+pub fn bind_keys(wm: &mut WindowManager) {
     let keybinds: Vec<Keybind> = vec![
         Keybind(
             24,

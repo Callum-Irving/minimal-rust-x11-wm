@@ -18,7 +18,6 @@ pub enum KeybindFunction<'a> {
     FnResultMut(fn(&mut WindowManager<'a>) -> Result<(), ReplyOrIdError>),
 }
 
-//pub struct Keybind<'a>(Keycode, ModMask, fn(&mut WindowManager<'a>));
 pub struct Keybind<'a>(Keycode, ModMask, KeybindFunction<'a>);
 
 pub struct WindowManager<'a> {
@@ -108,6 +107,7 @@ impl<'a> WindowManager<'a> {
         Ok(())
     }
 
+    // TODO: Implement geometry
     fn manage_window(&mut self, window: Window, geom: &GetGeometryReply) {
         self.windows.push_front(window);
     }
@@ -128,7 +128,6 @@ impl<'a> WindowManager<'a> {
                 GrabMode::ASYNC,
                 GrabMode::ASYNC,
             )?;
-            debug!("Grabbed key {} with mod {:?}", keybind.0, keybind.1);
         }
         self.conn.grab_key(
             true,
@@ -167,23 +166,36 @@ impl<'a> WindowManager<'a> {
     /// Handle an X11 event
     fn handle_event(&mut self, event: Event) -> Result<(), ReplyOrIdError> {
         match event {
-            Event::CreateNotify(event) => {}
-            Event::DestroyNotify(event) => {}
+            Event::CreateNotify(event) => self.handle_create_notify(event),
+            Event::DestroyNotify(event) => self.handle_destroy_notify(event),
             Event::ConfigureRequest(event) => self.handle_configure_request(event)?,
-            Event::PropertyNotify(event) => {}
+            Event::PropertyNotify(event) => self.handle_property_notify(event),
             Event::MapRequest(event) => self.handle_map_request(event)?,
             Event::MappingNotify(event) => self.handle_mapping_notify(event)?,
             Event::UnmapNotify(event) => self.handle_unmap_notify(event),
-            Event::EnterNotify(event) => {}
-            Event::ButtonPress(event) => {}
-            Event::ButtonRelease(event) => {}
-            Event::MotionNotify(event) => {}
+            Event::EnterNotify(event) => self.handle_enter_notify(event),
+            Event::ButtonPress(event) => self.handle_button_press(event),
+            Event::ButtonRelease(event) => self.handle_button_release(event),
+            Event::MotionNotify(event) => self.handle_motion_notify(event),
             Event::KeyPress(event) => self.handle_key_press(event)?,
             _ => {}
         };
 
         Ok(())
     }
+
+    fn handle_create_notify(&self, event: CreateNotifyEvent) {}
+
+    /// Handle destroy notify
+    ///
+    /// This just checks if the destroyed window was managed and unmanages it if it was.
+    fn handle_destroy_notify(&mut self, event: DestroyNotifyEvent) {
+        // This removes all windows that are equal to event.window
+        self.windows.retain(|&x| x != event.window);
+        // TODO: Refocus just in case the focused window was destroyed
+    }
+
+    fn handle_property_notify(&self, event: PropertyNotifyEvent) {}
 
     /// Handle a mapping notify event
     ///
@@ -246,15 +258,13 @@ impl<'a> WindowManager<'a> {
         Ok(())
     }
 
-    fn handle_expose() {}
+    fn handle_enter_notify(&self, event: EnterNotifyEvent) {}
 
-    fn handle_enter_notify() {}
+    fn handle_button_press(&self, event: ButtonPressEvent) {}
 
-    fn handle_button_press() {}
+    fn handle_button_release(&self, event: ButtonReleaseEvent) {}
 
-    fn handle_button_release() {}
-
-    fn handle_motion_notify() {}
+    fn handle_motion_notify(&self, event: MotionNotifyEvent) {}
 
     fn handle_key_press(&mut self, event: KeyPressEvent) -> Result<(), ReplyOrIdError> {
         debug!("Keycode: {}. Modmask: {}", event.detail, event.state);
@@ -264,12 +274,9 @@ impl<'a> WindowManager<'a> {
         for keybind in self.keybinds.iter() {
             // TODO: Clean up event.detail by removing mouse bits
             // TODO: Add way to handle function arguments
-            if event.detail == keybind.0 {
-                if (event.state & 0x7f) == u16::from(keybind.1) {
-                    debug!("Got keyboard shortcut");
-                    keybind_pressed = Some(keybind);
-                    break;
-                }
+            if event.detail == keybind.0 && (event.state & 0x7f) == u16::from(keybind.1) {
+                keybind_pressed = Some(keybind);
+                break;
             }
         }
 
@@ -329,7 +336,6 @@ fn main() {
     let (conn, screen_num) = x11rb::connect(None).unwrap();
     debug!("Got connection!");
 
-    // NOTE: Research borrowing (the & symbol here)
     let screen = &conn.setup().roots[screen_num];
     debug!("Got screen!");
 
@@ -337,6 +343,7 @@ fn main() {
     let mut wm = WindowManager::new(&conn, screen).unwrap();
     debug!("Created WM!");
 
+    // Enable keybinds
     config::bind_keys(&mut wm);
 
     // Take control of existing windows

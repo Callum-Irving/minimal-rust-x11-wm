@@ -6,7 +6,7 @@ This is a project I am creating for fun. The goal is to have a functional tiling
 
 ### Dependencies
 
-* An X11 server like [Xorg](https://wiki.archlinux.org/title/Xorg)
+* An X11 server
 * Rust and Cargo
 
 ### Running
@@ -14,6 +14,8 @@ This is a project I am creating for fun. The goal is to have a functional tiling
 * Make sure you aren't running any other window manager
 * In the project directory run `cargo build --release`
 * Run the executable created in `target/release`
+
+I suggest running in a nested X server for development. The server that I use is called [Xephyr](https://wiki.archlinux.org/title/Xephyr)
 
 ## License
 
